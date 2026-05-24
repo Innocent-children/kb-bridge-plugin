@@ -1,0 +1,111 @@
+{
+  "id": "kb-bridge",
+  "name": "KB Bridge",
+  "description": "Intercepts OpenClaw turns, calls Knowledge Bridge, and injects evidence into the LLM context.",
+  "version": "0.1.0",
+  "activation": {
+    "onStartup": true,
+    "onCapabilities": ["hook"]
+  },
+  "uiHints": {
+    "baseUrl": {
+      "label": "KB-Bridge base URL",
+      "placeholder": "http://127.0.0.1:8111"
+    },
+    "sharedSecret": {
+      "label": "KB shared secret",
+      "sensitive": true,
+      "help": "Must match KB_SHARED_SECRET configured on the Knowledge Bridge service."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string"
+      },
+      "sharedSecret": {
+        "type": "string"
+      },
+      "requestTimeoutMs": {
+        "type": "number",
+        "minimum": 1000
+      },
+      "query": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "injectEmptyKbResponses": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ingest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "autoCandidateEnabled": {
+            "type": "boolean"
+          },
+          "manualCommandPrefixes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "manualSourceType": {
+            "type": "string",
+            "enum": [
+              "FEISHU_CHAT",
+              "MARKDOWN",
+              "TUTORIAL",
+              "NOTE",
+              "ATTACHMENT"
+            ]
+          },
+          "candidateSourceType": {
+            "type": "string",
+            "enum": [
+              "FEISHU_CHAT",
+              "MARKDOWN",
+              "TUTORIAL",
+              "NOTE",
+              "ATTACHMENT"
+            ]
+          },
+          "skipSelfMessages": {
+            "type": "boolean"
+          },
+          "statusPolling": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "intervalMs": {
+                "type": "number",
+                "minimum": 1000
+              },
+              "maxDurationMs": {
+                "type": "number",
+                "minimum": 1000
+              },
+              "maxConsecutiveErrors": {
+                "type": "number",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      },
+      "debug": {
+        "type": "boolean"
+      }
+    }
+  }
+}
