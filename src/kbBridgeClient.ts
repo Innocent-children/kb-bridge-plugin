@@ -1,9 +1,11 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
+import { openAsBlob } from "node:fs";
 
 import type {
   CandidateRequest,
   CandidateResponse,
   EvidenceSource,
+  FileIngestRequest,
   IngestRequest,
   IngestResponse,
   IngestStatusResponse,
@@ -52,6 +54,23 @@ export class KbBridgeClient {
     return this.getJson<IngestStatusResponse>(
       `/api/v1/ingest/status/${encodeURIComponent(String(taskId))}`,
     );
+  }
+
+  async ingestFile(request: FileIngestRequest): Promise<IngestResponse> {
+    this.requireSharedSecret("file ingest");
+    const form = new FormData();
+    form.set("requestId", request.requestId);
+    form.set("userId", request.userId);
+    if (request.chatId) form.set("chatId", request.chatId);
+    form.set("messageId", request.messageId);
+    form.set("force", String(request.force ?? false));
+    const blob = await openAsBlob(request.filePath, request.mimeType ? { type: request.mimeType } : undefined);
+    form.set("file", blob, request.fileName);
+    return this.fetchJson<IngestResponse>("/api/v1/ingest/file", {
+      method: "POST",
+      headers: { accept: "application/json", "X-KB-File-Token": this.config.sharedSecret },
+      body: form,
+    });
   }
 
   private async postJson<T>(

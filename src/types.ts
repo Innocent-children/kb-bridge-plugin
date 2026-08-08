@@ -23,6 +23,10 @@ export type KbBridgePluginConfig = {
     manualSourceType: KnowledgeSourceType;
     candidateSourceType: KnowledgeSourceType;
     skipSelfMessages: boolean;
+    fileCommandPrefixes: string[];
+    fileCancelCommands: string[];
+    fileIntentTtlMs: number;
+    mediaRoot?: string;
     statusPolling: {
       enabled: boolean;
       intervalMs: number;
@@ -74,6 +78,7 @@ export type IngestAttachment = {
   name?: string;
   url?: string;
   mimeType?: string;
+  localPath?: string;
 };
 
 export type IngestRequest = {
@@ -113,8 +118,21 @@ export type IngestStatusResponse = {
   processedGuideKey?: string | null;
   processedQaKey?: string | null;
   errorMessage?: string | null;
+  errorCode?: string | null;
+  retryable?: boolean | null;
   createdAt?: string;
   updatedAt?: string;
+};
+
+export type FileIngestRequest = {
+  requestId: string;
+  userId: string;
+  chatId?: string;
+  messageId: string;
+  filePath: string;
+  fileName: string;
+  mimeType?: string;
+  force?: boolean;
 };
 
 export type MessageEnvelope = {

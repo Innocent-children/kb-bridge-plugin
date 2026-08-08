@@ -3,6 +3,9 @@ import {
   definePluginEntry,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createHash } from "node:crypto";
+import { basename, isAbsolute, relative, resolve } from "node:path";
+import { realpath, stat } from "node:fs/promises";
 
 import {
   canonicalChannelType,
@@ -11,10 +14,13 @@ import {
 import { createKbRequestId, KbBridgeClient } from "./kbBridgeClient.js";
 import {
   extractMessageEnvelope,
+  extractMediaAttachments,
+  isMediaPlaceholder,
   isManualIngestText,
   latestUserText,
   parseManualIngestCommand,
 } from "./messages.js";
+import { FileIntentStore } from "./fileIntentStore.js";
 import { buildPromptInjection } from "./prompt.js";
 import type {
   CandidateRequest,
@@ -90,6 +96,10 @@ export default definePluginEntry({
             enum: ["FEISHU_CHAT", "MARKDOWN", "TUTORIAL", "NOTE", "ATTACHMENT"],
           },
           skipSelfMessages: { type: "boolean" },
+          fileCommandPrefixes: { type: "array", items: { type: "string" } },
+          fileCancelCommands: { type: "array", items: { type: "string" } },
+          fileIntentTtlMs: { type: "number", minimum: 1000 },
+          mediaRoot: { type: "string" },
           statusPolling: {
             type: "object",
             additionalProperties: false,
@@ -115,6 +125,7 @@ export default definePluginEntry({
     );
 
     const manualIngestPromises = new Map<string, Promise<ManualIngestResult>>();
+    const fileIntents = new FileIntentStore();
     const ingestStatusMonitors = new Map<number, IngestStatusMonitor>();
     const handleManualIngestCommandOnce = (
       envelope: MessageEnvelope,
@@ -220,6 +231,42 @@ export default definePluginEntry({
       "inbound_claim",
       async (event: unknown, ctx: unknown) => {
         const envelope = extractMessageEnvelope(event, ctx);
+        const result = await handleFileIngestMessage(client, config, fileIntents, envelope,
+          extractMediaAttachments(event, ctx));
+        if (!result) return;
+        if (result.ingest) {
+          startIngestStatusPolling({ api, client, logger, config, envelope,
+            response: result.ingest, monitors: ingestStatusMonitors });
+        }
+        return { handled: true, reason: result.reason, reply: result.reply };
+      },
+      { priority: 75 },
+    );
+
+    api.on(
+      "reply_dispatch",
+      async (event, ctx) => {
+        const envelope = extractMessageEnvelope(event.ctx, event.ctx);
+        const result = await handleFileIngestMessage(client, config, fileIntents, envelope,
+          extractMediaAttachments(event.ctx, event.ctx));
+        if (!result) return;
+        if (result.ingest) {
+          startIngestStatusPolling({ api, client, logger, config, envelope,
+            response: result.ingest, monitors: ingestStatusMonitors });
+        }
+        ctx.dispatcher.sendFinalReply({ text: result.reply.text });
+        ctx.dispatcher.markComplete();
+        ctx.recordProcessed("completed", { reason: result.reason });
+        ctx.markIdle(result.reason);
+        return { handled: true, queuedFinal: true, counts: ctx.dispatcher.getQueuedCounts() };
+      },
+      { priority: 75 },
+    );
+
+    api.on(
+      "inbound_claim",
+      async (event: unknown, ctx: unknown) => {
+        const envelope = extractMessageEnvelope(event, ctx);
 
         const command = parseManualIngestCommand(
           envelope.text,
@@ -288,6 +335,9 @@ export default definePluginEntry({
 
         const envelope = extractMessageEnvelope(event, ctx);
         if (!envelope.text) {
+          return;
+        }
+        if (isMediaPlaceholder(envelope.text)) {
           return;
         }
         if (config.ingest.skipSelfMessages && envelope.isSelfMessage) {
@@ -413,6 +463,86 @@ async function handleManualIngestCommand(
       },
     };
   }
+}
+
+async function handleFileIngestMessage(
+  client: KbBridgeClient,
+  config: KbBridgePluginConfig,
+  intents: FileIntentStore,
+  envelope: MessageEnvelope,
+  attachments: MessageEnvelope["attachments"],
+): Promise<ManualIngestResult | undefined> {
+  const text = envelope.text.trim();
+  const key = {
+    accountId: envelope.delivery?.accountId,
+    sessionKey: envelope.sessionKey ?? envelope.chatId,
+    senderId: envelope.userId,
+  };
+  if (config.ingest.fileCancelCommands.includes(text)) {
+    intents.cancel(key);
+    return { handled: true, reason: "kb-bridge-file-intent-cancelled",
+      reply: { text: "已取消本次文件入库。" } };
+  }
+  if (config.ingest.fileCommandPrefixes.includes(text)) {
+    intents.arm(key, config.ingest.fileIntentTtlMs);
+    return { handled: true, reason: "kb-bridge-file-intent-armed",
+      reply: { text: "请在两分钟内发送一个要入库的文件。" } };
+  }
+
+  const files = attachments.filter((item) => item.localPath);
+  if (files.length === 0) {
+    if (intents.has(key) && isMediaPlaceholder(text)) {
+      intents.consume(key);
+      return { handled: true, reason: "kb-bridge-file-media-missing",
+        reply: { text: "文件下载不可用，请重新发送“入库文件”后再试。", isError: true } };
+    }
+    return undefined;
+  }
+  if (!intents.has(key)) return undefined;
+  if (files.length !== 1) {
+    return { handled: true, reason: "kb-bridge-file-count-invalid",
+      reply: { text: "每次只能入库一个文件，请重新发送。", isError: true } };
+  }
+  if (!intents.consume(key)) return undefined;
+
+  try {
+    const filePath = await validateMediaPath(files[0]!.localPath!, config.ingest.mediaRoot);
+    const messageId = envelope.messageId ?? createKbRequestId();
+    const requestId = createHash("sha256").update([
+      envelope.delivery?.accountId ?? "", envelope.sessionKey ?? envelope.chatId ?? "",
+      envelope.userId, messageId, "0",
+    ].join("\u001f")).digest("hex");
+    const response = await client.ingestFile({
+      requestId,
+      userId: envelope.userId,
+      chatId: envelope.chatId,
+      messageId,
+      filePath,
+      fileName: files[0]!.name ?? basename(filePath),
+      mimeType: files[0]!.mimeType,
+    });
+    return { handled: true, reason: "kb-bridge-file-ingest",
+      reply: { text: `文件已接收：taskId=${response.taskId}，status=${response.status}` },
+      ingest: response };
+  } catch (error) {
+    return { handled: true, reason: "kb-bridge-file-ingest-error",
+      reply: { text: `文件入库失败：${formatError(error)}`, isError: true } };
+  }
+}
+
+async function validateMediaPath(input: string, configuredRoot?: string): Promise<string> {
+  if (!isAbsolute(input)) throw new Error("媒体路径必须是绝对路径");
+  const actual = await realpath(input);
+  const info = await stat(actual);
+  if (!info.isFile()) throw new Error("媒体路径不是普通文件");
+  if (configuredRoot) {
+    const root = await realpath(resolve(configuredRoot));
+    const child = relative(root, actual);
+    if (child.startsWith("..") || isAbsolute(child)) {
+      throw new Error("媒体路径不在允许目录内");
+    }
+  }
+  return actual;
 }
 
 function startIngestStatusPolling(params: {
