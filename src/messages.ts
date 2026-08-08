@@ -129,7 +129,7 @@ export function extractMessageEnvelope(event: unknown, ctx?: unknown): MessageEn
           }
         : undefined,
     isGroup: readBoolean(eventRecord.isGroup) ?? readBoolean(metadata.isGroup),
-    attachments: extractAttachments(eventRecord.attachments ?? metadata.attachments),
+    attachments: extractMediaAttachments(event, ctx),
     isSelfMessage:
       readBoolean(eventRecord.isFromSelf) ??
       readBoolean(eventRecord.self) ??
@@ -216,9 +216,36 @@ function extractAttachments(value: unknown): IngestAttachment[] {
         name: readString(record.name) ?? readString(record.filename),
         url: readString(record.url) ?? readString(record.downloadUrl),
         mimeType: readString(record.mimeType) ?? readString(record.contentType),
+        localPath: readString(record.localPath) ?? readString(record.path)
+          ?? readString(record.MediaPath) ?? readString(record.mediaPath),
       };
     })
-    .filter((item) => item.name || item.url || item.mimeType);
+    .filter((item) => item.name || item.url || item.mimeType || item.localPath);
+}
+
+export function extractMediaAttachments(event: unknown, ctx?: unknown): IngestAttachment[] {
+  const eventRecord = asRecord(event);
+  const ctxRecord = asRecord(ctx);
+  const metadata = asRecord(eventRecord.metadata);
+  const existing = extractAttachments(eventRecord.attachments ?? metadata.attachments);
+  const paths = [eventRecord.MediaPath, eventRecord.mediaPath, metadata.MediaPath,
+    metadata.mediaPath, ctxRecord.MediaPath, ctxRecord.mediaPath,
+    eventRecord.MediaPaths, eventRecord.mediaPaths, metadata.MediaPaths,
+    metadata.mediaPaths, ctxRecord.MediaPaths, ctxRecord.mediaPaths]
+    .flatMap((value) => Array.isArray(value) ? value : [value])
+    .filter((value): value is string => typeof value === "string" && value.length > 0);
+  for (const localPath of paths) {
+    if (!existing.some((item) => item.localPath === localPath)) {
+      existing.push({ localPath });
+    }
+  }
+  return existing;
+}
+
+export function isMediaPlaceholder(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return /^\[(file|document|media|attachment)(:[^\]]+)?\]$/.test(normalized)
+    || /^<(file|document|media|attachment)>$/.test(normalized);
 }
 
 function readText(value: unknown): string | undefined {

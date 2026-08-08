@@ -9,6 +9,8 @@ const DEFAULT_MANUAL_PREFIXES = ["#入库", "#kb add", "/kb add", "/kb-add"];
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 5000;
 const DEFAULT_STATUS_POLL_MAX_DURATION_MS = 15 * 60 * 1000;
 const DEFAULT_STATUS_POLL_MAX_ERRORS = 3;
+const DEFAULT_FILE_COMMANDS = ["入库文件", "#入库文件", "/kb-file"];
+const DEFAULT_FILE_CANCEL_COMMANDS = ["取消入库文件", "取消文件入库", "/kb-file-cancel"];
 
 export function resolveConfig(input: unknown): KbBridgePluginConfig {
   const raw = isRecord(input) ? input : {};
@@ -38,6 +40,10 @@ export function resolveConfig(input: unknown): KbBridgePluginConfig {
         "FEISHU_CHAT",
       ),
       skipSelfMessages: readBoolean(ingest.skipSelfMessages, true),
+      fileCommandPrefixes: readStringArray(ingest.fileCommandPrefixes, DEFAULT_FILE_COMMANDS),
+      fileCancelCommands: readStringArray(ingest.fileCancelCommands, DEFAULT_FILE_CANCEL_COMMANDS),
+      fileIntentTtlMs: readNumber(ingest.fileIntentTtlMs, 120_000),
+      mediaRoot: typeof ingest.mediaRoot === "string" ? ingest.mediaRoot : undefined,
       statusPolling: {
         enabled: readBoolean(statusPolling.enabled, true),
         intervalMs: readNumber(

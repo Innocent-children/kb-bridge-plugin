@@ -80,6 +80,21 @@
           "skipSelfMessages": {
             "type": "boolean"
           },
+          "fileCommandPrefixes": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "fileCancelCommands": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "fileIntentTtlMs": {
+            "type": "number",
+            "minimum": 1000
+          },
+          "mediaRoot": {
+            "type": "string"
+          },
           "statusPolling": {
             "type": "object",
             "additionalProperties": false,
