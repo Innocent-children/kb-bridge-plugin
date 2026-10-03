@@ -2,11 +2,7 @@
 
 该插件会将 OpenClaw 渠道对话连接到 `docs/api_openclaw.txt` 中描述的 Knowledge Bridge 服务。
 
-当前版本关闭知识查询：共享服务密钥与消息 envelope 的 userId 不能验证最终登录用户。`resolveConfig` 始终关闭 query，`KbBridgeClient.query` 也拒绝直接调用；显式设置 `query.enabled=true` 不会重新启用。上传和入库行为保留。
-
-本次依赖安装遇到 pnpm 构建脚本审批，没有批准或执行这些脚本。已有本地依赖时直接使用 `node node_modules/typescript/bin/tsc -p tsconfig.build.json` 与 `node --test test/fileIntentStore.test.mjs test/fileMedia.test.mjs test/queryIsolation.test.mjs` 验证，不通过 `pnpm run` 自动安装。原 lockfile 的 OpenClaw importer 与 package.json specifier 不一致仍保留原字节，未以本次任务扩展依赖变更。
-
-它是一个非 LLM capability 的桥接插件，不把工具暴露给 LLM。原查询链路保留在代码中，但当前不执行：
+它是一个非 LLM capability 的桥接插件，不把工具暴露给 LLM。普通查询主链路是：
 
 ```text
 飞书 -> OpenClaw -> KB-Bridge -> LLM -> OpenClaw -> 飞书
@@ -14,7 +10,7 @@
 
 它提供三条 hook 链路：
 
-- 查询注入：当前关闭，`before_prompt_build` 不调用查询接口。
+- 查询注入：`before_prompt_build` 调用 `POST /api/v1/query`，并将返回的 `sources` 与 `instructions` 注入当前 LLM 轮次。
 - 手动入库：`before_dispatch` 处理 `#入库`、`#kb add`、`/kb add` 和 `/kb-add`，然后调用 `POST /api/v1/ingest/manual` 并直接返回入库结果，不进入 LLM；`inbound_claim` 和 `before_agent_reply` 保留为更早或特殊入口的短路处理。提交成功后插件会轮询 `GET /api/v1/ingest/status/{taskId}`，入库完成或异常时提醒原会话。
 - 可选候选入库：`message_received` 可以观察传入消息，并异步调用 `POST /api/v1/ingest/candidate`。
 
@@ -24,7 +20,7 @@
 
 | 接口 | 触发位置 | 默认是否启用 | HMAC 签名 | 用途 |
 | --- | --- | --- | --- | --- |
-| `POST /api/v1/query` | `before_prompt_build` | 否，缺少可验证最终用户身份，配置不能启用 | 是 | 当前不调用 |
+| `POST /api/v1/query` | `before_prompt_build` | 是，`query.enabled=true` 时每轮非空对话触发 | 是 | 获取知识证据包，将 `sources` 和 `instructions` 注入 OpenClaw 当前 LLM 轮次 |
 | `POST /api/v1/ingest/manual` | `before_dispatch` / `inbound_claim` / `before_agent_reply` | 是，仅命中 `ingest.manualCommandPrefixes` 时触发 | 否 | 手动提交内容入库并直接返回结果，不进入 LLM |
 | `GET /api/v1/ingest/status/{taskId}` | manual ingest status polling | 是，手动入库成功且 `ingest.statusPolling.enabled=true` 时触发 | 否 | 轮询入库后续状态，并在 `COMPLETED`、`FAILED`、`DISABLED` 或轮询异常时提醒原会话 |
 | `POST /api/v1/ingest/candidate` | `message_received` | 否，需设置 `ingest.autoCandidateEnabled=true` | 是 | 异步评估普通消息是否值得沉淀为知识 |
@@ -65,7 +61,7 @@ openclaw gateway restart
           "requestTimeoutMs": 8000,
           "debug": true,
           "query": {
-            "enabled": false,
+            "enabled": true,
             "injectEmptyKbResponses": false
           },
           "ingest": {
@@ -88,15 +84,15 @@ openclaw gateway restart
 }
 ```
 
-启用 `ingest.autoCandidateEnabled=true` 后，`sharedSecret` 必须与 Knowledge Bridge 服务端的 `KB_SHARED_SECRET`（或 `kb.security.shared-secret`）保持一致。该密钥只证明服务身份，不能启用当前关闭的个人知识查询。
+`sharedSecret` 必须与 Knowledge Bridge 服务端的 `KB_SHARED_SECRET`（或 `kb.security.shared-secret`）保持一致。默认 `query.enabled=true`，因此常规查询会调用需要签名的 `/api/v1/query`；如果未配置 `sharedSecret`，查询会被插件跳过并写入 gateway warning 日志。启用 `ingest.autoCandidateEnabled=true` 后，候选入库同样依赖该密钥。
 
 插件不会校验或过滤 OpenClaw 渠道，所有进入 hook 的消息都会按同一逻辑处理。在确认 KB-Bridge 中的去重与审核行为之前，请保持 `autoCandidateEnabled` 关闭。
 
 旧配置中的 `query.channelAllowlist` 已移除；由于插件配置启用了严格 schema，请从 `openclaw.json` 中删除该字段。
 
-手动入库命令会在 `before_dispatch` 被直接处理并跳过模型派发。当前不查询知识库。
+默认在 `query.enabled=true` 时，每轮非空用户消息都会查询知识库。手动入库命令会在 `before_dispatch` 被直接处理并跳过模型派发，避免同一条入库消息再触发检索或 LLM 回复。
 
-`query.injectEmptyKbResponses` 在查询关闭时没有运行效果。
+当 `/api/v1/query` 返回 `route=LLM_ONLY` 且没有 `sources` 时，插件默认不会注入 Knowledge Bridge 上下文。只有把 `query.injectEmptyKbResponses` 设置为 `true`，才会把空证据包也注入本轮 LLM 上下文，便于调试路由或让模型显式感知 KB 没有返回内容。
 
 如果你在 `openclaw.json` 里显式配置了 `ingest.manualCommandPrefixes`，请把 `#kb add` 也加入该数组；否则 `#kb add ...` 会绕过手动入库逻辑，被当成普通 `#kb` 查询消息。
 
@@ -163,7 +159,7 @@ Base64(HMAC-SHA256(requestId + timestamp + SHA256(requestBody), sharedSecret))
 
 ## 排障
 
-- 查询没有触发：这是当前缺少可验证最终用户身份时的预期行为，修改开关或共享密钥不会重新启用。
+- 查询没有触发：确认 `query.enabled=true`、用户消息非空、`sharedSecret` 已配置，且 KB-Bridge 没有把本轮路由到空 `LLM_ONLY` 响应。
 - 手动入库没有触发：确认消息以 `ingest.manualCommandPrefixes` 中的某个前缀开头；如果覆盖了默认数组，需要把 `#kb add`、`/kb add` 等仍需使用的前缀显式写回去。
 - 入库状态没有提醒到原会话：查看 gateway 日志中 `[kb-bridge] status notification`、`direct status notification` 相关记录，确认 OpenClaw outbound adapter、`sessionKey` 和 delivery context 可用。
 - 需要看完整 HTTP 请求/响应：临时开启 `debug=true`，排查后关闭，避免长期记录用户问题和知识库证据。

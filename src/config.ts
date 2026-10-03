@@ -25,7 +25,7 @@ export function resolveConfig(input: unknown): KbBridgePluginConfig {
     sharedSecret: readString(raw.sharedSecret, ""),
     requestTimeoutMs: readNumber(raw.requestTimeoutMs, DEFAULT_TIMEOUT_MS),
     query: {
-      enabled: false,
+      enabled: readBoolean(query.enabled, true),
       injectEmptyKbResponses: readBoolean(query.injectEmptyKbResponses, false),
     },
     ingest: {

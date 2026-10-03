@@ -28,7 +28,11 @@ export class KbBridgeClient {
   }
 
   async query(request: QueryRequest): Promise<QueryResponse> {
-    throw new Error("Knowledge query is disabled: a shared service secret and envelope userId do not verify the final user identity.");
+    this.requireSharedSecret("query");
+    const response = await this.postJson<unknown>("/api/v1/query", request, {
+      signed: true,
+    });
+    return normalizeQueryResponse(response, request.requestId);
   }
 
   async createCandidate(

@@ -37,9 +37,7 @@
         "additionalProperties": false,
         "properties": {
           "enabled": {
-            "type": "boolean",
-            "default": false,
-            "description": "Query is disabled until the final user identity can be verified; this setting cannot enable it."
+            "type": "boolean"
           },
           "injectEmptyKbResponses": {
             "type": "boolean"
