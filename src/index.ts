@@ -74,7 +74,7 @@ export default definePluginEntry({
         type: "object",
         additionalProperties: false,
         properties: {
-          enabled: { type: "boolean" },
+          enabled: { type: "boolean", default: false, description: "Query is disabled until final-user identity is verifiable." },
           injectEmptyKbResponses: { type: "boolean" },
         },
       },
